@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from collections import deque
 import random
-import atari_py
+# import atari_py
 import cv2
 import torch
 import numpy as np
