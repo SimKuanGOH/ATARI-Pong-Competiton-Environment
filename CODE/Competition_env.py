@@ -14,7 +14,7 @@ from tqdm import trange
 from agent import Agent
 from agent2 import Agent2
 from env2 import Env
-from memory import ReplayMemory
+# from memory import ReplayMemory
 # from test import test
 
 
@@ -51,7 +51,7 @@ parser.add_argument('--norm-clip', type=float, default=10, metavar='NORM', help=
 parser.add_argument('--learn-start', type=int, default=int(20e3), metavar='STEPS', help='Number of steps before starting training')
 parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--evaluation-interval', type=int, default=100000, metavar='STEPS', help='Number of training steps between evaluations')
-parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
+parser.add_argument('--evaluation-episodes', type=int, default=2, metavar='N', help='Number of evaluation episodes to average over')
 # TODO: Note that DeepMind's evaluation method is running the latest agent for 500K frames ever every 1M steps
 parser.add_argument('--evaluation-size', type=int, default=500, metavar='N', help='Number of transitions to use for validating Q')
 parser.add_argument('--render', action='store_true', help='Display screen (testing only)')
@@ -80,28 +80,6 @@ else:
   args.device = torch.device('cpu')
 
 
-# Simple ISO 8601 timestamped logger
-def log(s):
-  print('[' + str(datetime.now().strftime('%Y-%m-%dT%H:%M:%S')) + '] ' + s)
-
-
-def load_memory(memory_path, disable_bzip):
-  if disable_bzip:
-    with open(memory_path, 'rb') as pickle_file:
-      return pickle.load(pickle_file)
-  else:
-    with bz2.open(memory_path, 'rb') as zipped_pickle_file:
-      return pickle.load(zipped_pickle_file)
-
-
-def save_memory(memory, memory_path, disable_bzip):
-  if disable_bzip:
-    with open(memory_path, 'wb') as pickle_file:
-      pickle.dump(memory, pickle_file)
-  else:
-    with bz2.open(memory_path, 'wb') as zipped_pickle_file:
-      pickle.dump(memory, zipped_pickle_file)
-
 
 # Environment
 import retro
@@ -129,21 +107,11 @@ if players == 2:
 priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn_start)
 
 
-# Construct validation memory
-val_mem = ReplayMemory(args, args.evaluation_size)
-T, done = 0, True
-while T < args.evaluation_size:
-  if done:
-    state = env.reset()
 
-  next_state, _, done, info = env.step(np.random.randint(0, action_space))
-  val_mem.append(state, -1, 0.0, done)
-  state = next_state
-  T += 1
 
 
 # Test DQN
-def test(args, env, T, dqn, val_mem, metrics, results_dir, evaluate=False):
+def test(args, env, dqn, evaluate=False):
   # env = Env(args)
   env.reset()
 
@@ -154,7 +122,7 @@ def test(args, env, T, dqn, val_mem, metrics, results_dir, evaluate=False):
 
 
 
-  metrics['steps'].append(T)
+  # metrics['steps'].append(T)
   T_rewards, T_Qs = [], []
 
   # Test performance over several episodes
@@ -177,7 +145,7 @@ def test(args, env, T, dqn, val_mem, metrics, results_dir, evaluate=False):
         action2 = dqn2.act_e_greedy(torch.flip(state,[2]) )  # Choose an action ε-greedily
         # print(action)
         state, reward, done, info = env.step_2P(action1, action2)  # Step
-        print("reward: ",reward, ", action1: ", action1, ", action2: ", action2, "done: ",done)
+        print("reward: ",reward, ", action1: ", action1, ", action2: ", action2, "done: ",done, "info", info)
 
 
       
@@ -190,15 +158,17 @@ def test(args, env, T, dqn, val_mem, metrics, results_dir, evaluate=False):
         break
   env.close()
 
+  return np.mean(T_rewards)
+
 # if args.evaluate:
 dqn.eval()  # Set DQN (online network) to evaluation mode
 
 if players == 1:
-  test(args, env, 0, dqn, val_mem, metrics, results_dir, evaluate=True)  # Test
+  avg_reward = test(args, env, dqn, evaluate=True)  # Test
 if players == 2:
-  test(args, env, 0, [dqn,dqn2], val_mem, metrics, results_dir, evaluate=True)  # Test
+  avg_reward = test(args, env, [dqn,dqn2], evaluate=True)  # Test
 
-print('Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
+# print('Avg. reward: ' + str(avg_reward))
 
 env.close()
 
