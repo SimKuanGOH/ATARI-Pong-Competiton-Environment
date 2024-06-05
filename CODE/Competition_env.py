@@ -6,16 +6,20 @@ from datetime import datetime
 import os
 import pickle
 
-# import atari_py
+import atari_py
 import numpy as np
 import torch
 from tqdm import trange
 
-from agent import Agent
-from agent2 import Agent2
+import inspect
+from G6.agent import Agent as AgentR
+from G6.agent import Agent as AgentL
+
+
+argsmodelR = os.path.basename(os.path.dirname(inspect.getfile(AgentR)))+"/model.pth"
+argsmodelL = os.path.basename(os.path.dirname(inspect.getfile(AgentL)))+"/model.pth"
+
 from env2 import Env
-# from memory import ReplayMemory
-# from test import test
 
 
 # Note that hyperparameters may originally be reported in ATARI game frames instead of agent steps
@@ -23,7 +27,7 @@ parser = argparse.ArgumentParser(description='Rainbow')
 parser.add_argument('--id', type=str, default='default', help='Experiment ID')
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-# parser.add_argument('--game', type=str, default='pong', choices=atari_py.list_games(), help='ATARI game')
+parser.add_argument('--game', type=str, default='pong', choices=atari_py.list_games(), help='ATARI game')
 parser.add_argument('--T-max', type=int, default=int(50e6), metavar='STEPS', help='Number of training steps (4x number of frames)')
 parser.add_argument('--max-episode-length', type=int, default=int(108e3), metavar='LENGTH', help='Max episode length in game frames (0 to disable)')
 parser.add_argument('--history-length', type=int, default=4, metavar='T', help='Number of consecutive states processed')
@@ -51,7 +55,7 @@ parser.add_argument('--norm-clip', type=float, default=10, metavar='NORM', help=
 parser.add_argument('--learn-start', type=int, default=int(20e3), metavar='STEPS', help='Number of steps before starting training')
 parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--evaluation-interval', type=int, default=100000, metavar='STEPS', help='Number of training steps between evaluations')
-parser.add_argument('--evaluation-episodes', type=int, default=2, metavar='N', help='Number of evaluation episodes to average over')
+parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
 # TODO: Note that DeepMind's evaluation method is running the latest agent for 500K frames ever every 1M steps
 parser.add_argument('--evaluation-size', type=int, default=500, metavar='N', help='Number of transitions to use for validating Q')
 parser.add_argument('--render', action='store_true', help='Display screen (testing only)')
@@ -80,16 +84,38 @@ else:
   args.device = torch.device('cpu')
 
 
+# Simple ISO 8601 timestamped logger
+def log(s):
+  print('[' + str(datetime.now().strftime('%Y-%m-%dT%H:%M:%S')) + '] ' + s)
+
+
+def load_memory(memory_path, disable_bzip):
+  if disable_bzip:
+    with open(memory_path, 'rb') as pickle_file:
+      return pickle.load(pickle_file)
+  else:
+    with bz2.open(memory_path, 'rb') as zipped_pickle_file:
+      return pickle.load(zipped_pickle_file)
+
+
+def save_memory(memory, memory_path, disable_bzip):
+  if disable_bzip:
+    with open(memory_path, 'wb') as pickle_file:
+      pickle.dump(memory, pickle_file)
+  else:
+    with bz2.open(memory_path, 'wb') as zipped_pickle_file:
+      pickle.dump(memory, zipped_pickle_file)
+
 
 # Environment
 import retro
 import numpy as np
 # env.close()
 
-players = 1
+players = 2
 
-if args.model2:
-  players = 2
+# if args.model2:
+#   players = 2
 
 env0 = retro.make(game='Pong-Atari2600', players=players)
 env = Env(env0)
@@ -98,31 +124,36 @@ env.train()
 action_space = env.action_space()
 
 # Agent
-dqn = Agent(args, env)
+args.model = argsmodelR
+dqn = AgentR(args, env)
 
 if players == 2:
-  dqn2 = Agent2(args, env)
+  args.model = argsmodelL
+  dqn2 = AgentL(args, env)
 
 
 priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn_start)
 
+T, done = 0, True
+while T < args.evaluation_size:
 
+  if done:
+    state = env.reset()
 
+  next_state, _, done, info = env.step(np.random.randint(0, action_space))
+  # val_mem.append(state, -1, 0.0, done)
+  state = next_state
+  T += 1
 
 
 # Test DQN
-def test(args, env, dqn, evaluate=False):
+def test(args, env, T, dqn, metrics, results_dir, evaluate=False):
   # env = Env(args)
   env.reset()
 
-
   env.eval()
 
-
-
-
-
-  # metrics['steps'].append(T)
+  metrics['steps'].append(T)
   T_rewards, T_Qs = [], []
 
   # Test performance over several episodes
@@ -145,7 +176,7 @@ def test(args, env, dqn, evaluate=False):
         action2 = dqn2.act_e_greedy(torch.flip(state,[2]) )  # Choose an action ε-greedily
         # print(action)
         state, reward, done, info = env.step_2P(action1, action2)  # Step
-        print("reward: ",reward, ", action1: ", action1, ", action2: ", action2, "done: ",done, "info", info)
+        print("reward: ",reward, ", action1: ", action1, ", action2: ", action2, "done: ",done)
 
 
       
@@ -158,19 +189,16 @@ def test(args, env, dqn, evaluate=False):
         break
   env.close()
 
-  return np.mean(T_rewards)
-
 # if args.evaluate:
 dqn.eval()  # Set DQN (online network) to evaluation mode
 
 if players == 1:
-  avg_reward = test(args, env, dqn, evaluate=True)  # Test
+  avg_reward, avg_Q = test(args, env, 0, dqn, metrics, results_dir, evaluate=True)  # Test
 if players == 2:
-  avg_reward = test(args, env, [dqn,dqn2], evaluate=True)  # Test
+  avg_reward, avg_Q = test(args, env, 0, [dqn,dqn2], metrics, results_dir, evaluate=True)  # Test
 
-# print('Avg. reward: ' + str(avg_reward))
+print('Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
 
 env.close()
 
 
-# python competition_env.py --model=results\weights25\model.pth --model2=results\pong.pth --evaluate --render
